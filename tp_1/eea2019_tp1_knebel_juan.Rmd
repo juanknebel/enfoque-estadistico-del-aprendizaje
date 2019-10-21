@@ -1,0 +1,337 @@
+---
+title: "Trabajo práctico Enfoque Estadistico del Aprendizaje Reentrega"
+author: "Juan Knebel"
+output:
+  html_notebook:
+    df_print: paged
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+<style type="text/css">
+div.main-container {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+# Librerias
+
+```{r message=FALSE, warning=FALSE}
+library(tinytex)
+library(tidyverse)
+library(dplyr)
+library(GGally)
+library(corrr)
+library(grid)
+library("ggpubr")
+library(glue)
+```
+
+# Carga de datos
+
+Preparación de los datos y carga del archivo de datos "ar_properties.csv"
+```{r}
+ar_properties = read.csv("ar_properties.csv")
+
+summary(ar_properties)
+```
+El dataset contiene información acerca de operaciones inmobiliaras mayormente de la Argentina y en mucho menor medida de Uruguay.
+Posee la localización de las propiedades por provincia (Buenos Aires se dividió en sectores), ciudad y barrio aunque la 
+variable **l3** que parece indicar la localidad, se puede observar que tiene datos mal cargados ya que se observa el barrio de Palermo.
+La provincia (ciudad autónoma en este caso) de Capital Federal es la que más datos posee. Se puede observar que la variable **bedrooms**
+pareciera tener algunos datos mal cargados ya que no debería haber valores negativos y su valor máximo de 390, que en principio pareciera "raro".
+Las variables **surface_total** y **surface_covered** también parecen contener valores mal cargados ya que sus mínimos valores son negativos.
+El mayor tipo de operación **operation_type** es la Venta y la mayoría de los precios estan en moneda dólar **currency**.
+Observando que el tipo de propiedad (**property_type**) Departamento y la operación (**operation_type**) Venta son las más usadas, tiene sentido
+que que el título (**title**) DEPARTAMENTO EN VENTA esté en la mayoría de las observaciones.
+
+# Filtrado de los datos.
+
+```{r}
+ar_properties_clean = 
+  ar_properties %>% 
+  filter(l1 == "Argentina", l2 == "Capital Federal", currency == "USD", operation_type == "Venta") %>% 
+  filter(property_type == "Departamento" | property_type == "PH" | property_type == "Casa") %>% 
+  select(id, l3, rooms, bedrooms, bathrooms, surface_total, surface_covered, price, property_type)
+
+glue("Cantidad de registros del dataset original: ", nrow(ar_properties))
+
+glue("Cantidad de registros despues filtrar el dataset original: ", nrow(ar_properties_clean))
+```
+Luego de filtrar el dataset orignal obtuvimos 61905 observaciones de las 388891 que posee el dataset original, lo que representa un 16% del total.
+
+# Análisis exploratorio I
+
+```{r}
+summary(ar_properties_clean)
+```
+Se puede ver que luego de filtrar los datos el tipo de propiedad que más se vende en Capital Federal es el Departamento, los valores negativos
+en las variables de superficie (**surface_total** y **surface_covered**) y habitaciones (**bedrooms**) desapareció. Se puede observar que la mediana
+para las variables **bedrooms**, **rooms** y **bathrooms** se mantiene en los mismos valores que el dataset original.
+En cuanto que la mediana en **surface_total** y **surface_covered** se mantuvo en valores cercanos al dataset original no sucedió lo mismo con sus medias.
+
+## Valores únicos y cantidad de NA para cada variable
+
+```{r}
+unique_values = ar_properties_clean %>% summarise_all(n_distinct)
+
+unique_values_without_na = ar_properties_clean %>% summarise_all(n_distinct, na.rm = TRUE)
+
+na_values = ar_properties_clean %>% summarise_all(~sum(as.integer(is.na(.))))
+
+table_count = rbind(unique=unique_values, unique_without_na=unique_values_without_na, na_count=na_values)
+
+table_count
+
+```
+
+La variable **bedrooms** contiene el 40% de las observaciones con valores faltantes lo que indicaría que nos aportará mucha información.
+
+## Correlación
+
+Matriz de correlación entre los valores numéricos, se usa el método de Pearson y se asume la normalidad de los datos.
+```{r message=FALSE, warning=FALSE}
+ar_properties_clean %>%
+  select(-id, -l3, -property_type) %>%
+  correlate(use="complete.obs", method = c("pearson")) %>% 
+  shave() %>% 
+  fashion()
+```
+
+La correlación entre la variable **bedrooms** y **rooms** es la más alta con un valor cercano a 1. Luego le siguen las superficies
+**surface_total** con **surface_covered** y por último el precio (**price**) está más relacionada con la cantidad de baños (**bathrooms**).
+
+# Preparación de los datos
+
+Luego de observar que la varibale **bedrooms** contiene 25298 valores faltantes y que además se correlaciona fuertemente con la variable **rooms**, lo cuál era esperable ya que una contiene a la otra, tiene sentido eliminarla del dataset.
+
+Eliminación de la variable **bedrooms** y de los registros que contienen datos faltantes.
+```{r}
+ar_properties_without_missing_values = ar_properties_clean %>%
+  select(-bedrooms) %>% drop_na()
+
+glue("Cantidad de registros despues filtrar el dataset original: ", nrow(ar_properties_without_missing_values))
+```
+
+# Análisis exploratorio II
+
+```{r}
+summary_by_price = function(dataset) {
+  dataset %>% 
+  summarise(min = min(price),
+            quantile_1 = quantile(price)[2],
+            median = median(price),
+            mean = mean(price),
+            quantile_3 = quantile(price)[4],
+            max = max(price))
+}
+
+```
+
+```{r}
+summary_by_price(ar_properties_without_missing_values)
+```
+Después de eliminar los valores faltantes y la variable **bedrooms** el valor máximo del precio es ahora 6000000 que representa un 13% del valor del dataset previo a eliminar los valores faltantes. Además que el 75% de las observaciones esten por debajo de los 270000 indica una distribución asimétrica, para corroborar esto a continuación se realizan los histogramas del precio en base al tipo de propiedad.
+
+```{r}
+hist_by_price = function(dataset, bins=200000) {
+  ggplot(dataset, aes(x=price)) + geom_histogram(color="darkblue", fill="lightblue", binwidth=bins) +
+    labs(title = "Precio (USD) de las propiedades\nde Capital Federal", x = "Precio (USD)")
+}
+
+hist_by_price_with_curve = function(dataset, bins=200000) {
+  ggplot(dataset, aes(x=price)) + geom_histogram(aes(y=..density..), colour="darkblue", fill="lightblue", binwidth=bins) + 
+    geom_density(alpha=.2, fill="#FF6666") +
+    labs(title = "Precio (USD) de las propiedades\nde Capital Federal", x = "Precio (USD)")
+}
+```
+
+
+```{r}
+hist_by_price(ar_properties_without_missing_values, 150000)
+```
+La asimetría a derecha que se observa en los histogramas corrobora lo mencionado anteriormente.
+
+```{r}
+summary_by_price_group_by_property_type = function(dataset) {
+  dataset %>% 
+  group_by(property_type) %>% 
+  summarise(min = min(price),
+            quantile_1 = quantile(price)[2],
+            median = median(price),
+            mean = mean(price),
+            quantile_3 = quantile(price)[4],
+            max = max(price))
+}
+```
+
+```{r}
+summary_by_price_group_by_property_type(ar_properties_without_missing_values)
+```
+Los precios de los PH se encuentran más acotados en un menor rango, evidenciando una concetración de precios. En cambio los departamentos, que si bien poseen el mayor rango de precios, muestra una concentración de sus precios entre el primer y tercer cuartil y las casas poseen un amplio rango de valores.
+
+```{r}
+ar_properties_without_missing_values %>% 
+  group_by(property_type) %>% 
+  summarise(sd = sd(price))
+```
+Ampliando lo descripto anteriormente se aprecia que las casas tienen una mayor desviación que el resto de las propiedades y por eso la mayor disperción de las observaciones.
+
+```{r}
+boxplot_by_property_type = function(dataset) {
+  ggplot(dataset,
+       aes(property_type, price, group=property_type, fill = factor(property_type))) + 
+  geom_boxplot(alpha= 0.75) + 
+  labs(fill = "Tipo de propiedad", title = "Boxplot precio (USD) segun\ntipo de propiedad", x = "Tipo de propiedad", y = "Precio (USD)")
+}
+
+boxplot_by_property_type_zoom = function(dataset) {
+  ggplot(dataset,
+       aes(property_type, price, group=property_type, fill = factor(property_type))) + 
+  geom_boxplot(alpha= 0.75) + 
+  coord_cartesian(ylim = c(6000, 500000)) +
+  labs(fill = "Tipo de propiedad", title = "Boxplot precio (USD) segun\ntipo de propiedad", x = "Tipo de propiedad", y = "Precio (USD)")
+}
+```
+
+```{r}
+boxplot_by_property_type(ar_properties_without_missing_values)
+```
+Se pueden ver datos atípicos en los extremos de los precios para los tres tipo de propiedades, pero fundamentalmente para las casas y departamentos.
+
+```{r message=FALSE, warning=FALSE}
+ar_properties_without_missing_values %>% 
+  select(-id, -l3) %>% 
+  mutate(property_type = factor(property_type)) %>%
+ggpairs(., 
+        title = "Matriz de correlaciones",
+        mapping = aes(colour= property_type), 
+        upper = list(continuous = "cor", combo = "box_no_facet", discrete = "facetbar", na = "na"), 
+        lower = list(continuous = "points", combo = "facethist", discrete = "facetbar", na = "na"))
+```
+
+```{r}
+graph_corelation = function(dataset) {
+  dataset %>%
+  select(-id, -l3, -property_type) %>%
+  correlate(use="pairwise.complete.obs") %>% 
+  rplot()
+}
+```
+
+```{r message=FALSE, warning=FALSE}
+graph_corelation(ar_properties_without_missing_values)
+```
+Se puede apreciar que las relaciones entre **bathrooms** vs **rooms** y **surface_total** vs **surface_covered** siguen siendo las más altas en cuanto que **price** se siguen relacionando más que moderadamente con **bathrooms**. También se observa que la proporción de departamentos es superior a las casas y PH.
+
+# Outliers
+
+Tomo la desición de eliminar aquellas observaciones que tengan un precio menor al primer cuartil menos dos distancias intercuartil y las que se encuentren por encima del tercer cuartil más dos distancias intercuartil.
+
+```{r}
+up_cut = quantile(ar_properties_without_missing_values$price)[4] + IQR(ar_properties_without_missing_values$price * 2)
+up_down = quantile(ar_properties_without_missing_values$price)[2] - IQR(ar_properties_without_missing_values$price * 2)
+
+ar_properties_without_outliers = ar_properties_without_missing_values %>% filter(price > up_down &  price < up_cut)
+
+glue("Cantidad de registros después de eliminar los outliers: ", nrow(ar_properties_without_outliers))
+```
+Se eliminaron 3402 observaciones de las 51210 que se tenian previamente, lo que equivale al 6.6% de las observaciones.
+
+# Analisis exploratorios III
+
+```{r}
+summary_by_price(ar_properties_without_outliers)
+```
+Luego de eliminar las observaciones marcadas como outliers y se observa que el valor mínimo no cambió y el máximo se redujo de 6000000 a 571000 y el tercer cuartil se mantuvo cercano al anterior dataset de 270000 a 248000.
+
+```{r}
+hist_by_price(ar_properties_without_outliers, 20000)
+```
+El histograma sigue mostrando una asimetría hacia la derecha pero se la forma de la curva se observa mucho mas suave.
+
+```{r}
+summary_by_price_group_by_property_type(ar_properties_without_outliers)
+```
+Los valores máximos de los tipo de propiedades se vieron afectados todos, el primer cuartil y la mediana cambiaron muy poco. En el caso de las casas la media y tercer cuartil cambiaron suceptiblemente, mientras que para los departamentos y PH si bien cambiaron, los cambios de los valores fueron menores.
+
+```{r}
+boxplot_by_property_type(ar_properties_without_outliers)
+```
+En los boxplots puede verse que las observaciones se encuentran mas concentradas y solo los departamentos y PH muestran algunos valores atípicos.
+
+```{r message=FALSE, warning=FALSE}
+graph_corelation(ar_properties_without_outliers)
+```
+
+```{r message=FALSE, warning=FALSE}
+ar_properties_without_outliers %>% 
+  select(-id, -l3) %>% 
+  mutate(property_type = factor(property_type)) %>%
+ggpairs(., 
+        title = "Matriz de correlaciones",
+        mapping = aes(colour= property_type), 
+        upper = list(continuous = "cor", combo = "box_no_facet", discrete = "facetbar", na = "na"), 
+        lower = list(continuous = "points", combo = "facethist", discrete = "facetbar", na = "na"))
+```
+Comparando con las correlaciones previo a la eliminación de los outliers se observa que la correlación más fuerte sigue siendo **surface_covered** vs **surface_total**. Hay que notar que la correlación de **price** vs **rooms** es ahora superior muy similar a **price** vs **bathrooms** si se compara con el dataset anterior. La cantidad de departamentos sigue siendo predominante en este nuevo dataset.
+
+# Modelo lineal
+
+### Modelo 1
+
+```{r}
+lm_price_rooms = lm(formula = price ~ rooms, data = ar_properties_without_outliers)
+summary(lm_price_rooms)
+```
+
+```{r}
+coef(lm_price_rooms)
+```
+
+```{r}
+ggplot(ar_properties_without_outliers, aes(rooms, price)) +
+  geom_point(ggplot2::aes(color = property_type)) + 
+  labs(x = "Habitaciones", y = "Precio", colour = "Tipo de propiedad") +
+  geom_abline(intercept = 52192.73, slope = 53247.82, colour = "blue")
+```
+**Modelo 1**
+$$precio\  =\ 52192.73\ +\ 53247.82\ *\ rooms$$
+Para una propiedad de 0 habitaciones el precio es de USD 52192.73 y aumenta a razón de USD 53247.82 por habitación en promedio. El p-valor es muy chico lo cuál indica que es estadistacamente significativo.
+
+### Modelo 2
+
+```{r}
+lm_price_surface = lm(formula = price ~ surface_total, data = ar_properties_without_outliers)
+summary(lm_price_surface)
+```
+
+```{r}
+coef(lm_price_surface)
+```
+
+```{r}
+ggplot(ar_properties_without_outliers, aes(surface_total, price)) +
+  geom_point(ggplot2::aes(color = property_type)) + 
+  labs(x = "Superficie total", y = "Precio", colour = "Tipo de propiedad") +
+  geom_abline(intercept = 193300.71483, slope = 5.88062, colour = "blue") +
+  coord_cartesian(xlim =c(0, 500), ylim = c(0, 600000))
+```
+**Modelo 2**
+$$precio\  =\ 193300.71483\ +\ 5.88062\ *\ surface$$
+La función que se obtiene es  indicando que para una propiedad de 0 metros cuadrados el precio es de USD 193300 que si bien no existen propiedades de 0 metros, puede interpretarse como el precio mínimo de cualquier propiedad y aumenta a razón de USD 6 por metro cuadrado en promedio. Este último valor de cuanto aumenta por metro cuadrado no parece explicar la realidad ya que por ejemplo una casa de 200 metros cuadrados costaría solo USD 600 más que una de 100 metros cuadrados y eso realmente no ocurre. A pesar de esto dicho el p-valor es muy chico lo cuál indica que es estadistacamente significativo.
+
+## Elección del modelo
+
+**Modelo 1**
+$$precio\  =\ 52192.73\ +\ 53247.82\ *\ rooms$$
+**Modelo 2**
+$$precio\  =\ 193300.71483\ +\ 5.88062\ *\ surface$$
+Teniendo en cuenta que el modelo 1 tiene un menor error residual 83080 vs 106400 del modelo 2 y que también los valores **R-squared** y **Adjusted R-squared** que se obtuvieron en el mismo modelo de 0.4 vs el 0.002%, elegiría el Modelo 1, **Precios y números de cuartos** para predecir los precios de las propiedades.
