@@ -1,0 +1,403 @@
+---
+title: "Trabajo práctico Enfoque Estadistico del Aprendizaje Reentrega"
+author: "Juan Knebel"
+output:
+  html_notebook:
+    df_print: paged
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+<style type="text/css">
+div.main-container {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+# Librerias
+
+```{r message=FALSE, warning=FALSE}
+library(tinytex)
+library(tidyverse)
+library(dplyr)
+library(GGally)
+library(corrr)
+library(grid)
+library("ggpubr")
+library(glue)
+library(broom)
+library(modelr)
+```
+
+# Carga de datos
+
+Preparación de los datos y carga del archivo de datos "ar_properties.csv"
+```{r}
+ar_properties = readRDS("ar_properties.rds")
+
+summary(ar_properties)
+```
+
+El nuevo dataset de las propiedades filtrados contiene 45904 observaciones donde el mínimo de las habitaciones es 1 y el máximo 8, pero el 75% de las observaciones contiene 3 o menos habitaciones. La misma cantidad de propiedades tiene 2 o menos baños. En cuanto a las superficies se puede ver, como uno esperaría, que cada uno de las marcadores exhibidos la superficie total es mayor que la superficie cubierta.
+
+```{r}
+na_values = ar_properties %>% summarise_all(~sum(as.integer(is.na(.))))
+
+na_values
+```
+
+También se puede ver que no hay valores nulos o "NA".
+
+# Ejercicio 1: Regresión lineal múltiple
+## a. Crear un modelo para predecir el precio con todas las covariables.
+
+```{r}
+lm_model_final = lm(
+  formula = price ~ rooms + bathrooms + 
+    surface_total + surface_covered + 
+    property_type + l3,
+  data = ar_properties)
+
+summary(lm_model_final)
+```
+## b. Analizar los resultados del modelo: 
+###   i.   Interpretación de los coeficientes estimados
+
+El precio esperado de una propiedad, según el modelo ajustado actual, aumentaría en 919 dólares por cada metro cuadrado de superficie total adicional, 1457 para cada metro cuadrado superficie cubierta, 34040 por cada baño y en -4000 por cada habitación extra, lo cuál es en principio atípico y es intuitivamente inesperado. Luego las variables dummy sumarán o restarán de acuerdo al barrio, al igual que ocurre con el tipo de propiedad.
+El valor del $\beta_{0}$ no tiene sentido por si solo ya que se trata de un valor negativo y estamos interpretando precios de ventas de inmuebles.
+
+Se pueden ver que existen muchos valores negativos para los valores de los $\beta_{i}$ especialmente en las variables dummy de **l3**, lo cual puede ocacionar que se indiquen precios que no son factibles. Por ejemplo un PH en el barrio de Villa Soldati de 2 habitaciones, 1 baño 50 metros cubiertos y 60 totales en promedio costaría:
+
+```{r}
+soldati <- tribble(
+    ~l3, ~rooms, ~bathrooms, ~surface_total, ~surface_covered, ~property_type,
+    "Villa Soldati", 2, 1, 60, 50 , "PH")
+
+soldati %>% add_predictions(lm_model_final)
+```
+El precio promedio sería: -44994.71 lo cuál es imposible.
+
+###   ii.  ¿Qué observan respecto de la significatividad de las variables dummy?
+
+Las variables dummy **property_type** obtuvieron una significación importante dejando al tipo **Casa** como grupo de control y aumenta al tratarse de Departamentos o PH, lo cuál va en contra de lo que suponemos de la realidad que las casas son más caras que los departamentos y PH. Esto podría estar influido en parte en que las casas que se encuentran a la venta no sean de los mismos barrios que los demás tipos de propiedades y que la cantidad de casas en el dataset es sensiblemente menor (casi 40 veces menos) que la cantidad de departamentos y 4 veces menor que los PH. Esto lo podemos a continuación dónde se ve que los Departamentos son más de 40000 y las casas a penas 1000.
+
+```{r}
+ar_properties %>% group_by(property_type) %>%select(property_type)%>%tally()
+```
+
+Y por último se puede ver que no todos los barrios tienen casas a la venta.
+
+```{r}
+ar_properties %>% group_by(l3,property_type) %>%select(property_type,l3)%>%tally()%>%arrange(l3,property_type,desc(n))
+```
+
+En cambio en las variables dummy de **l3** se pueden ver resultados de todo tipo, desde algunos casos en que son significativos hasta aquellos que no. Tiene como variable de control al barrio **Abasto** y se puede ver que barrios como Villa Soldati, Villa Lugano o Pompeya los coeficientes son negativos ya que sabemos que los precios en esos barrios son menores, al contrario de lo que ocurre con Puerto Madero, Recoleta o Palermo que sus propiedades son mucho más caras. En particular me resulto extraño ver una diferencia, con una significación importante, con el barrio de Boedo ya que son barrios similares y aún así el precio promedio en éste útimo disminuyo bastante.
+
+###   iii. Medidas de evaluación del modelo
+
+```{r}
+glance(lm_model_final)
+```
+
+
+Despues de generar el modelo utilizando todas las variables se obtiene un valor de $R^{2}$ de 0.77 con p-valor muy bajo cercano al 0, indicando que el test es estadísticamente significativo.
+
+## c. ¿Qué es preferible tener para vender?
+###   i.   un departamento de 120 mts cuadrados cubiertos en abasto, con 3 dormitorios y 2 baños
+###   ii.  Un PH en balvanera, con 80 mts cuadrados cubiertos, 20 mts cuadrados no cubiertos, 2 dormitorios y 3 baños.
+```{r}
+abasto_balvanera <- tribble(
+    ~l3, ~rooms, ~bathrooms, ~surface_total, ~surface_covered, ~property_type,
+    "Abasto", 3, 2, 120, 120 , "Departamento",
+    "Balvanera", 2, 3, 100, 80, "PH")
+
+abasto_balvanera %>% add_predictions(lm_model_final)
+```
+Viendo las predicciones que se obtienen del modelo lineal es preferible vender un Departamento en el barrio del Abasto a 324596.4 en promedio a un PH en Balvanera a 215267.6 en promedio.
+
+## d. Realizar un modelo sin la covariable l3 e interpretar sus resultados (todas las partes de la salida que consideren relevantes)
+
+```{r}
+lm_model_final_without_l3 = lm(
+  formula = price ~ rooms + bathrooms + 
+    surface_total + surface_covered + 
+    property_type,
+  data = ar_properties)
+
+summary(lm_model_final_without_l3)
+```
+
+Con respecto al modelo anterior se puede apreciar que los valores para las variables bathrooms, surface_covered y property_type los valores subieron los más importantes en particular fueron para el tipo de propiedad ya que en ambos aumentó casi un 50% más (property_typeDepartamento = 92653.32, property_typePH = 46779.37 en el modelo anterior).
+En cambio para rooms y surface_total los valores bajaron y fue muy notorio en las habitaciones que disminuyó 3 veces y media (rooms = -3961 en el modelo anterior).
+Al igual que el primer modelo con la variable **l3** el valor de $\beta_{0}$ por si solo no indica nada. El test obtuvo un p-valor muy bajo, siendo entonces estadísticamente significativo sobre el conjunto de observaciones. Con un $R^{2}$ ajustado de 0.68
+
+## e. ¿Cuál es el modelo que mejor explica la variabilidad del precio?
+
+El primero modelo lineal con la variable **l3** obtuvo un $R^{2} = 0.77$ y el segundo modelo un $R^{2} = 0.68$, por lo que el primer modelo explica casi un 9% mejor los precios con lo cuál indicaría que los barrios tienen influencia en los precios de las propiedades como uno esperaría que así ocurriese.
+
+# Ejercicio 2: Creación de variables
+
+## a. En el ejercicio anterior encontramos que algunos barrios son significativos, aunque no todos. Crear una nueva variable barrios que divida a los barrios según el precio por metro cuadrado promedio de las propiedades en ellos, con los grupos c(‘alto’, ‘medio’, ‘bajo’). Realizar un análisis exploratorio para definir los puntos de corte de la nueva variable y explicar los criterios utilizados en la construcción de la misma.
+
+Primero genero un dataset con los barrios, el precio promedio de cada uno de ellos y la diferencia entre el precio total del dataset original.
+
+```{r}
+mean_properties_by_surface = mean(ar_properties$price/ar_properties$surface_total)
+
+l3_with_mean_price = ar_properties %>% group_by(l3) %>% summarise(mean_price_by_l3 = mean(price / surface_total)) %>% mutate(diff_with_mean_total = mean_price_by_l3 - mean_properties_by_surface)
+
+l3_with_mean_price
+```
+
+A continuación vamos a ver que valores mínimos, máximos y cuartiles tiene la nueva variable **diff_with_mean_total** que es la diferencia entre el precio medio del total de las propiedades con el precio medio de cada barrio.
+
+```{r}
+l3_with_mean_price %>% 
+  summarise(min = min(diff_with_mean_total),
+            quantile_1 = quantile(diff_with_mean_total)[2],
+            median = median(diff_with_mean_total),
+            mean = mean(diff_with_mean_total),
+            quantile_3 = quantile(diff_with_mean_total)[4],
+            max = max(diff_with_mean_total))
+```
+
+Se puede ver que el 50% de los precios promedios se encuentran a no más de 500 dolares de diferencia y el 75% de los barrios están por debajo del promedio total.
+Teniendo en cuenta ésta útima observación voy a tomar la decisión de elegir a los barrios que tengan un diferencia en el precio promedio por debejo del 1 primer cuartil como precio bajo, aquellos que estén entre el 1 y 3 cuartil como precio promedio y los que esten por encima del 3 cuartil como precio alto.
+
+```{r}
+q1 = quantile(l3_with_mean_price$diff_with_mean_total)[2]
+q3 = quantile(l3_with_mean_price$diff_with_mean_total)[4]
+
+l3_with_mean_price = l3_with_mean_price %>% mutate(category_price = ifelse(diff_with_mean_total < q1, "bajo", ifelse(diff_with_mean_total > q3, "alto", "medio")))
+
+l3_with_mean_price
+```
+
+A continuación uno la categoría de los precios al dataset original.
+
+```{r}
+ar_properties_with_barrio = ar_properties %>% inner_join(l3_with_mean_price, by=c("l3","l3"))%>%select(-mean_price_by_l3, -diff_with_mean_total)%>%rename(barrio = category_price)
+
+ar_properties_with_barrio
+```
+
+## b. Calcular el modelo que predice el precio en función de las nuevas covariables e interpretar sus resultados (todas las partes de la salida que consideren relevantes)
+
+```{r}
+lm_with_barrio = lm(
+  formula = price ~ rooms + bathrooms + 
+    surface_total + surface_covered + 
+    property_type + barrio,
+  data = ar_properties_with_barrio)
+
+summary(lm_with_barrio)
+```
+
+En este caso la variable que más sufre cambios es la de habitaciones pasadno de -3961 a -8750 y si bien las variables Departamento y PH se incrementaron, no fue tan abrupto ya que se ubico entre un 10% y un 20% más. Notar que todos los $\beta_{i}$ son significativos.
+De nuevo el valor e $\beta_{0}$ por si solo no tiene mucha relevancia. El valor del $R^{2}$ ajustado fue de 0.73 y con un p-valor muy bajo lo cual indica que es estadísticamente significativo el modelo.
+
+## c. ¿Qué modelo explica mejor la variabilidad de los datos, el que utiliza la variable l3 o el que utiliza barrio? En su opinión, ¿Qué modelo es más útil? ¿Porqué?
+
+El primero modelo lineal con la variable **l3** obtuvo un $R^{2} = 0.77$ y el nuevo con la variable **barrio** obtuvo un $R^{2} = 0.73$. En cuanto a simplemente a los valores de $R^{2}$ el primer modelo indicaría que explica mejor la variabilidad los datos. Al mismo tiempo ese primer modelo tiene muchos $\beta_{i}$ con valores que no son significativos, en cambio el nuevo modelo que si tiene en cuenta los barrios, aunque de manera agrupada, tiene todos sus coeficientes con valores siginificativos por lo que eligiría éste último modelo.
+
+## d. La interpretación de los coeficientes de las variables surface_covered y surface_total puede ser un poco problemática ya que se encuentran correlacionadas. Entonces, podemos construir una nueva variable surface_patio para la diferencia entre ambas superficies:
+
+### i. Construir una nueva variable surface_patio. Dado que algunos registros pueden contener la contradicción de que surface_total<surface_covered, explicitar cómo se procede para dichos casos.
+
+En caso de que la superficie total sea menor que la superficie cubierta, voy a asumir entonces que la nueva variable surface_patio sea igual a 0, o sea, no tiene patio.
+
+```{r}
+ar_properties_with_barrio_patio = ar_properties_with_barrio %>% mutate(surface_patio = ifelse(surface_total < surface_covered, 0, surface_total - surface_covered))
+
+ar_properties_with_barrio_patio
+```
+
+### ii. Calcular nuevamente el modelo lineal para todas las covariables previas (excepto surface_total), surface_covered y surface_patio e interpretar los coeficientes de estas dos últimas variables
+
+```{r}
+lm_with_barrio_patio = lm(
+  formula = price ~ rooms + bathrooms + 
+    surface_patio + surface_covered + 
+    property_type + barrio,
+  data = ar_properties_with_barrio_patio)
+
+summary(lm_with_barrio_patio)
+```
+
+Comparando con el modelo que tiene la variable **barrio** se obtuvo exactamente los mismos valores para todos los $\beta_{i}$ excepto **surface_covered** que crece de 1457 a 2516, la nueva variable **surface_patio** se obtuvo el mismo valor que antes se tenía para **surface_total**.
+
+A continuación se muestra primero la correlación que existía entre **surface_total** y **surface_covered** y luego entre **surface_patio** contra **surface_covered** que se puede observar como disminuyo notablemente.
+
+```{r}
+glue("Correlación entre surface_total y surface_covered: ", cor(ar_properties_with_barrio_patio$surface_total, ar_properties_with_barrio_patio$surface_covered))
+
+glue("Correlación entre surface_patio y surface_covered: ", cor(ar_properties_with_barrio_patio$surface_patio, ar_properties_with_barrio_patio$surface_covered))
+```
+
+# Ejercicio 3: Evaluación del modelo
+
+## a. Analizar los residuos del modelo elaborado en 2.d
+
+Calculamos varias medidas útiles para analizar el comportamiento de los residuos
+
+```{r}
+properties_with_extra_values = augment(lm_with_barrio_patio)
+
+properties_with_extra_values
+```
+
+Veamos si el promedio de los residuos es cercano a 0.
+
+```{r}
+glue("Promedio de los residuos: ", mean(properties_with_extra_values$.resid))
+```
+El valor es muy cercano a 0, lo cual es un muy buen comienzo. La próxima validación es ver que no que los residuos no tengan ninguna estructura. Para eso vamos a realizar dos gráficos. Uno de los valores predichos vs residuos y el segundo comparando los residuos estandarizados vs un distribución teórica ~$N(0,1)$
+
+```{r message=FALSE, warning=FALSE}
+ggplot(properties_with_extra_values, aes(.fitted, .resid)) + 
+  geom_point() +
+  geom_hline(yintercept = 0, size = 1,colour = "firebrick") +
+  geom_smooth(se = FALSE) +
+  labs(title = "Predicciones vs residuos", x = "Valores predichos", y = "Residuos")
+```
+
+En este gráfico se puede observar que existe una estructura en los residuos obtenidos del modelo 2.d. Por ejemplo se puede ver que a medida que los precios predichos aumentan, también lo hacen sus residuos. Indicando que existe algún concepto que se está perdiendo en el modelo.
+
+```{r message=FALSE, warning=FALSE}
+ggplot(properties_with_extra_values, aes(sample = .std.resid)) + 
+  stat_qq() +
+  geom_abline(h = 0, size = 1,colour = "firebrick") +
+  #geom_smooth() +
+  labs(title = "QQ Plot de los residuos estandarizados", x = "Valores teóricos", y = "Residuos estandarizados")
+```
+
+En éste último gráfico se utilizando los residuos estandarizados vs un qqplot, se puede ver como en los extremos se aleja mucho de una distribución normal por lo que el modelo no estaría bien definido.
+
+## b. Calcular el modelo logaritmico y comparar la performance del modelo de 2.d con éste, tanto en términos de la variabilidad explicada cómo de su relación con los supuestos del modelo lineal. Re-interpretar los parámetros del modelo.
+$$log(price) = \beta{0} + \beta{1}log(rooms) + \beta{2}log(bathrooms) + \beta{3}log(surface\_covered) + \beta{4}(property\_type) + \beta{5}(barrio) + \beta{6}(surface\_patio)$$
+Primero generamos un nuevo dataset similar al original pero en las variables price, rooms,bathrooms, surface_covered reemplazo el valor por su logaritmo. Y luego obtengo el modelo a analizar.
+
+```{r}
+ar_properties_log = ar_properties_with_barrio_patio %>% mutate(rooms = log(rooms), bathrooms = log(bathrooms), surface_covered = log(surface_covered), price = log(price))
+
+lm_log = lm(
+  formula = price ~ rooms + bathrooms + 
+    surface_covered + property_type + 
+    barrio + surface_patio,
+  data = ar_properties_log
+)
+
+summary(lm_log)
+```
+
+Lo primero que podemos ver al igual que el modelo 2.d es que es estadísticamente significativo ya que tiene un p-valor muy bajo y todos sus $\beta_{i}$ también lo son. Una diferencia siginificativa es que el valor de $R^{2}$ ajustado en este modelo nuevo es de 0.8 en comparación al 0.73 del modelo 2.d, aumentando un 7% la explicación de la variabilidad de los precios medios. También se puede ver que el intercept o $\beta_{0}$ en este caso al ser positivo por si solo tiene sentido y puede explicarse como el precio base medio para una propiedad sin saber en principio nada de ella. Los valores que en el modelo 2.d tenian coeficientes negativos como rooms, barriobajo y barriomedio en este nuevo modelo siguen manteniendo el mismo signo y lo mismo para los coeficientes positivos. Pero en todos los casos sus valores (en valor absoluto) aumentaron en grandes magnitudes.
+
+A continuación voy a relizar el estudio de residuos al igual que el punto anterior.
+
+```{r}
+properties_log_with_extra_values = augment(lm_log)
+
+glue("Promedio de los residuos del nuevo modelo logarítmico: ", mean(properties_log_with_extra_values$.resid))
+```
+
+Lo primero que podemos ver es que de nuevo el promedio de los residuos es muy cercano al 0.
+
+```{r message=FALSE, warning=FALSE}
+ggplot(properties_log_with_extra_values, aes(.fitted, .resid)) + 
+  geom_point() +
+  geom_hline(yintercept = 0, size = 1,colour = "firebrick") +
+  geom_smooth(se = FALSE) +
+  labs(title = "Predicciones vs residuos", x = "Valores predichos", y = "Residuos")
+```
+
+En este gráfico ya no se observa la estructura que vimos anteriormente mucho mas definida, en este caso parecieran estar distribuidos mas aleatoriamente.
+
+```{r message=FALSE, warning=FALSE}
+ggplot(properties_log_with_extra_values, aes(sample = .std.resid)) + 
+  stat_qq() +
+  geom_abline(h = 0, size = 1,colour = "firebrick") +
+  #geom_smooth() +
+  labs(title = "QQ Plot de los residuos estandarizados", x = "Valores teóricos", y = "Residuos estandarizados")
+```
+
+Y por último se puede apreciar que si bien en los extremos se aleja un poco de la recta de la normal, éste alejamiento no es tan pronunciado como en el modelo anterior y en todo el resto de los residuos se encuentran muy pegados a la recta.
+Con estas apreciaciones podríamos decir que este nuevo modelo explica y ajusta de manera mucho más correcta la variabilidad de los precios de medios de las propiedades. El modelo en cuestión que se mostró puede considerarse un mezcla entre un **modelo log-nivel** sobre las variables property_type, barrio y surface_patio y un **modelo log-log** sobre el resto de las variables.
+
+# Ejercicio 4: Dataframes anidados
+
+## a. Anidar por la variable property_type
+
+```{r}
+ar_properties_by_type = ar_properties_with_barrio_patio %>% select(-id) %>% group_by(property_type) %>% nest()
+
+ar_properties_by_type
+```
+
+## b. Construir para cada tipo de propiedad el modelo de 2.d e interpretar los resultados en cada caso. Qué diferencias encuentran entre los distintos modelos?
+
+Tomo el dataset agrupo previamente por tipo de propiedad y genero para cada uno de ellos un modelo lineal similar al del ejercicio 2.d utilizando las variables: 
+$$price = \beta_{0} + \beta_{1}rooms + \beta_{2}bathrooms + \beta_{3}surface\_patio + \beta_{4}surface\_covered + \beta_{5}barrio$$
+Luegopara cada modelo voy a agregar el cada uno de los modelos lineales, el valor de los datos extras de la función augment y glance.
+
+```{r}
+property_model <- function(dataset) {
+  lm(formula = price ~ rooms + bathrooms + surface_patio + surface_covered + barrio, 
+    data = dataset)
+}
+
+ar_properties_by_type = ar_properties_by_type %>% 
+  mutate(
+    model = map(data, property_model),
+    aug = map2(model, data, augment),
+    gla = map(model, glance),
+    tdy = map(model, tidy)
+    )
+
+ar_properties_by_type
+```
+
+Ahora vamos a ver los resultados de $R^{2}$ para cada uno de los tres modelos
+
+```{r}
+ar_properties_by_type %>% unnest(gla) %>% select(property_type, adj.r.squared)
+```
+
+El modelo 2.d tenía un valor de $R^{2}$ ajustado de 0.73 y los vistos recientemente en el que dividimos por tipo de propiedad, solo en el caso de los Departamentos obtuvimos un mejor valor pero solo por 3%. Para PH y Casa disminuyó y sobre todo las casas el decremento fue considerable de cerca del 16%.
+
+```{r}
+ar_properties_by_type %>% unnest(tdy) %>% select(property_type, term, estimate, p.value) %>% arrange(term)
+```
+
+Es interesante destacar que todos los coeficientes para todos los modelos obtuvieron el mismo signo a exepción de la variable **rooms** que para las casas y PH fue positivo mientras que para los Departamentos fue negativa. Todos los valores tienen significacion ya que su p-valor es muy bajo. En las variables dummy las Casas siempre tuvieron un mayor valor absoluto, indicando que el barrio tiene más influencia en los precios de las casas en comparación al resto de los tipos de propiedades.Para el resto los Departamento fueron mayores en terminos de valores absolutos.
+
+```{r}
+unested_property_type = ar_properties_by_type %>% unnest(aug)
+```
+
+```{r message=FALSE, warning=FALSE}
+ggplot(unested_property_type, aes(.fitted, .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, size = 1,colour = "firebrick") +
+  geom_smooth(se = FALSE) +
+  labs(title= "Predicciones vs residuos", x = "Predicciones", y = "Residuos") + 
+  facet_wrap(~property_type)
+```
+
+Los tres modelos presentan alguna estructura en sus residuos, en especial las Casas la cual parece disminuir para luego aumentar.
+
+```{r message=FALSE, warning=FALSE}
+ggplot(unested_property_type, aes(sample= .std.resid)) +
+  stat_qq() +
+  geom_abline() +
+  labs(title= "QQ Plot de los residuso estandarizados", x = "Valores teóricos", y = "Residuos estandarizados") +
+  facet_wrap(~property_type)
+```
+
+Si bien el modelo de los Departamentos tiene un mayor $R^{2}$ que las Casas y PH, se puede ver que la normalidad de los residuos estandarizados se ajusta mejor en las Casas y los PH.
