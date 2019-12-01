@@ -239,7 +239,7 @@ Podemos empezar a buscar los peores modelos ordenando por $R^2$
 
 ```{r}
 glnc %>% 
-  arrange(-r.squared)
+  arrange(r.squared)
 ```
 
 Podemos confirmar la intuición de que el modelo lineal no esta funcionando bien para África. 
@@ -256,11 +256,9 @@ glnc %>%
 
 
 ```{r}
-plotly::ggplotly(glnc %>% 
-  ggplot(aes(continent, r.squared, color = continent, legend = country)) + 
-    geom_jitter(width = 0.5, height = 0)
-    #geom_point()
-)
+glnc %>% 
+  ggplot(aes(continent, r.squared)) + 
+    geom_jitter(width = 0.5)
 ```
 
 Podemos seleccionar los 6 peores modelos y graficarlos
@@ -328,13 +326,13 @@ ggplot(., aes(estimate, term, xmin = low, xmax = high, height = 0)) +
 En este gráfico tenemos graficado cada uno de los parámetros del modelo, con +-1 desvío estándar. si quisiéramos comparar todos los modelos.
 
 ```{r}
-plotly::ggplotly(tdy %>% mutate(low = estimate - std.error,
+tdy %>% mutate(low = estimate - std.error,
                           high = estimate + std.error) %>% 
 ggplot(., aes(estimate, term, xmin = low, xmax = high, height = 0, color = country)) +
      geom_point() +
     geom_vline(xintercept = 0, linetype="dashed", color = "darkgreen") +
      geom_errorbarh()+
-  theme(legend.position = "none"))
+  theme(legend.position = "none")
 ```
 
 ¿cómo interpretan estos coeficientes? ¿qué representa el intercepto de cada modelo?
@@ -365,23 +363,23 @@ au
 
 ```{r  out.width = "33%", fig.asp = 1, fig.width = 3, fig.align='default'}
 
-plotly::ggplotly(ggplot(au, aes(.fitted, .resid, color = year)) +
+ggplot(au, aes(.fitted, .resid)) +
   geom_point()+
   geom_hline(yintercept = 0) +
-  geom_smooth(se = FALSE))
+  geom_smooth(se = FALSE)
 
-plotly::ggplotly(ggplot(au, aes(sample= .std.resid, color = year))+
+ggplot(au, aes(sample= .std.resid))+
   stat_qq()+
-  geom_abline())
+  geom_abline()
 
-plotly::ggplotly(ggplot(au, aes(.fitted, sqrt(abs(.std.resid))))+
+ggplot(au, aes(.fitted, sqrt(abs(.std.resid))))+
   geom_point()+
-  geom_smooth(se = FALSE))
+  geom_smooth(se = FALSE)
 
-plotly::ggplotly(ggplot(au, aes(.hat, .std.resid, color = year)) +
+ggplot(au, aes(.hat, .std.resid)) +
   geom_vline(size = 2, colour = "white", xintercept = 0) +
   geom_hline(size = 2, colour = "white", yintercept = 0) +
-  geom_point() + geom_smooth(se = FALSE))
+  geom_point() + geom_smooth(se = FALSE)
 
 ```
 

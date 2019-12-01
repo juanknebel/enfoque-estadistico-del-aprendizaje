@@ -1,0 +1,436 @@
+---
+title: "Trabajo práctico Enfoque Estadistico del Aprendizaje"
+author: "Juan Knebel"
+output:
+  html_notebook:
+    df_print: paged
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+<style type="text/css">
+div.main-container {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+## Librerias
+
+```{r message=FALSE, warning=FALSE}
+library(tinytex)
+library(tidyverse)
+library(dplyr)
+library(GGally)
+library(corrr)
+library(grid)
+library("ggpubr")
+library(glue)
+library(broom)
+library(modelr)
+library(gridExtra)
+library(ISLR)
+library(pROC)
+library(cowplot)
+library(OneR)
+library(rlang)
+library(caret)
+library("e1071")
+library(purrr)
+```
+
+### 1. Preparación de los datos
+#### a. Leer el archivo titanic_complete_train.csv y mostrar su estructura
+
+**Diccionario de las variables**
+
+|Variable|Definition|Key|
+|-|-|-|
+|survival|Survival|0 = No, 1 = Yes|
+|pclass|Ticket class|1 = 1st, 2 = 2nd, 3 = 3rd|
+|sex|Sex|	|
+|Age|Age in years|	|
+|sibsp|# of siblings / spouses aboard the Titanic|	|
+|parch|# of parents / children aboard the Titanic|	|
+|ticket|Ticket number|	|
+|fare|Passenger fare|	|
+|cabin|Cabin number|	|
+|embarked|Port of Embarkation|C = Cherbourg, Q = Queenstown, S = Southampton|
+
+
+```{r}
+titanic_dataset = read.csv("titanic_complete_train.csv")
+glimpse(titanic_dataset)
+summary(titanic_dataset)
+```
+Lo primero que se puede ver es que la mayor cantidad de pasajeros (Sex) fue masculino, que existe una gran salto en el precio del pasaje (Fare) ya que el 75% de los mismos costó menos de 31 y el máximo fue de 512.33. La variable que representa la cabina (Cabin) contine muchos valores indefinidos. La mayor cantidad de pasajeros embarcó en Southampton y por último el 50% de los pasajeros se encontraban entre los 21 y 36 años.
+
+#### b. Seleccionar las variables PassengerId, Survived, Pclass, Sex, Age, SibSp,Parch, Fare y Embarked
+```{r}
+titanic_dataset_filter = 
+  titanic_dataset %>% 
+  select("PassengerId", "Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked")
+```
+
+
+#### c. Transformar las variables Survived, Pclass y Embarked a factor
+```{r}
+titanic_dataset_converted = 
+  titanic_dataset_filter %>%
+  mutate(Survived = as.factor(Survived), Pclass = as.factor(Pclass), Embarked = as.factor(Embarked))
+
+summary(titanic_dataset_converted)
+```
+Luego de transformar las variables a factor podemos apreciar que la cantidad de personas que no sobrevivió es cercano al doble de los que sobrevivieron.
+
+#### d. Realizar un gráfico de ggpairs para las variables Survived, Pclass, Sex, Age y Fare e interpretarlo
+```{r message=FALSE, warning=FALSE}
+ggpairs(titanic_dataset_converted, mapping = aes(colour= Survived), legend = 1, columns = c("Survived", "Pclass", "Sex", "Age", "Fare"), title = "Comparativa entre variables")+ theme(axis.text.x = element_text(angle = 90, hjust = 1)) + theme_bw()
+```
+El color celeste indica los pasajeros que sobrevivieron y el naranja los que no. Existe una desproporción en la cantidad de no sobrevivientes de acuerdo a las clases y el sexo, para ver cuales son estas diferencias vamos a mostrar una serie de gráficos particulares.
+
+```{r}
+ggplot(data = titanic_dataset_converted, aes(x = Survived, fill = Sex)) +
+  geom_bar() +
+  labs(title = "istribución de sobrevivientes según el sexo", y = "Cantidad", x = "Sobreviviente")
+```
+Se puede ver claramente que la cantidad de no sobrevivientes fueron del sexo masculino, mientras que los sobrevivientes si bien fueron más mujeres no alcanza a ser tan desproporcionado como el anterior.
+
+```{r}
+ggplot(data = titanic_dataset_converted, aes(x = Survived, fill = Pclass)) +
+  geom_bar() +
+  labs(title = "Distribución de sobrevivientes según la clase", y = "Cantidad", x = "Sobreviviente")
+```
+En este caso en particular los sobrevivientes se distribuyeron de manera uniforme entre las 3 clases, mientras que los no sobrevivientes fueron en su mayoría de la clase más baja. Hay que tener en cuenta que la cantidad de pasajeros en 3 clase representaban más del 55% del total, como se puede ver a continuación.
+
+```{r}
+titanic_dataset_converted %>% 
+  group_by(Pclass) %>% 
+  summarise(quantity=n()) %>%
+  mutate(percentage = (quantity / dim(titanic_dataset_converted)[1]) * 100)
+```
+
+#### e. Mostrar la distribución de clase (Sobrevivientes vs No Sobrevivientes)
+```{r}
+titanic_dataset_converted %>% 
+  group_by(Survived) %>% 
+  summarise(quantity=n()) %>%
+  mutate(percentage = (quantity / dim(titanic_dataset_converted)[1]) * 100)
+```
+
+Cerca del 62% de los pasajeros abordo del Titanic no sobrevivieron.
+
+#### f. Dividir al dataset en conjunto de entrenamiento (70% de los datos) y validación (30% de los datos). Volver a analizar la distribución de clase para chequear que este balanceado.
+**NOTA**: Ya hemos imputado los valores faltantes de ciertas variables en este dataset
+```{r message=FALSE, warning=FALSE}
+set.seed(209771)
+
+titanic_train_validation <- titanic_dataset_converted %>% resample_partition(c(train = 0.7, test = 0.3))
+
+titanic_train = titanic_train_validation$train %>% as_tibble()
+titanic_validation = titanic_train_validation$test %>% as_tibble()
+
+plot_total = ggplot(data = titanic_dataset_converted, aes(x = Survived, fill = Survived)) +
+              geom_bar() + theme(legend.position = "none") +
+              labs(title = "Dataset completo")
+
+plot_train = ggplot(data = titanic_train, aes(x = Survived, fill = Survived)) +
+              geom_bar() + theme(legend.position = "none") +
+              labs(title = "Dataset train")
+
+plot_validation = ggplot(data = titanic_validation, aes(x = Survived, fill = Survived)) +
+              geom_bar() + theme(legend.position = "none") +
+              labs(title = "Dataset validacion")
+
+figure = ggarrange(plot_total, plot_train, plot_validation, ncol=3, nrow=1)
+
+annotate_figure(figure, top = text_grob("Distribución de los sobrevivientes en los distintos datasets",
+                                        color = "black", face = "bold", size = 14))
+```
+Se puede ver que para los tres datasets que se tienen la proporción de sobrevivientes vs no sobrevivientes es similar.
+
+###  2. Predicciones (Trabajar con dataset de ENTRENAMIENTO)
+#### a. Realizar un modelo de regresión logística para predecir la supervivencia en función de Pclass, Sex y Age. Usar solo el dataset de entrenamiento
+El primer modelo que se va a generar en su forma analítica la probabilidad de sobrevivir es la siguiente:
+$$\pi_{i}\ = expit(\beta_{0}\ +\ \beta_{1}X_{Pclass}\ +\ \beta_{2}X_{Sex}\ +\ \beta_{3}X_{Age})$$
+
+```{r}
+glmodel_1 = glm(Survived ~ Pclass + Sex + Age , data = titanic_train, family = binomial)
+summary(glmodel_1)
+```
+
+#### b. Dar una breve interpretación de los coeficientes y su significatividad
+Todos los coeficientes involucrados son estadísticamente significativos y todos a excepción del $\beta_{0}$ son negativos. Indicando que a medida que estar en clases más bajas o ser hombre aumentan las probabilidades de no sobrevivir. La edad en cambio si bien tiene un coeficiente negativo su valor es muy bajo y no cambiaría mucho la probabilidad final.
+
+#### c. ¿Quién tiene una mayor probabilidad de supervivencia? Rose que es una mujer de 17 años que viaja en primera clase o Jack que es un hombre de 20 años viajando en tercera clase
+```{r}
+rose = data.frame(Pclass= as.factor(1), Sex="female", Age=17)  
+jack = data.frame(Pclass= as.factor(3), Sex="male", Age=20)
+baby_jack = data.frame(Pclass= as.factor(3), Sex="male", Age=5)
+father_jack = data.frame(Pclass= as.factor(3), Sex="male", Age=45)
+grandpa_jack = data.frame(Pclass= as.factor(3), Sex="male", Age=80)
+rich_jack = data.frame(Pclass= as.factor(1), Sex="male", Age=45)
+
+pred_Rose <- predict(glmodel_1, newdata = rose, type = "response")
+pred_Jack <- predict(glmodel_1, newdata = jack, type = "response")
+pred_baby_Jack <- predict(glmodel_1, newdata = baby_jack, type = "response")
+pred_father_Jack <- predict(glmodel_1, newdata = father_jack, type = "response")
+pred_grandpa_Jack <- predict(glmodel_1, newdata = grandpa_jack, type = "response")
+pred_rich_Jack <- predict(glmodel_1, newdata = rich_jack, type = "response")
+
+glue("La probabilidad de sobrevivir de Rose es: {pred_Rose} ")
+glue("La probabilidad de sobrevivir de Jack es: {pred_Jack}")
+glue("La probabilidad de sobrevivir de Jack bebe es: {pred_baby_Jack}")
+glue("La probabilidad de sobrevivir de Jack padre es: {pred_father_Jack}")
+glue("La probabilidad de sobrevivir de Jack abuelo es: {pred_grandpa_Jack}")
+glue("La probabilidad de sobrevivir de Jack rico es: {pred_rich_Jack}")
+```
+La probabilidad de sobrevivir de Jack fue cercana al 12% y la de Rose al 95%. Las probabilidades de supervivencia de Jack teniendo en cuenta su sexo y su clase eran muy bajas por más que Rose hubiera compartido su puerta, su probabilidad era muy baja.
+Para ver también la influencia de la edad, supuse que Jack tuvo un bebe, padre y abuelo y en ningún caso sus posibilidades de sobrevivir superaron el 19%, por lo que la edad si bien influye no lo es tanto como las demás variables. Si observamos a Jack rico de la misma edad que el padre de Jack, éste supera en 33% su probabilidad de sobrevivir.
+
+### 3. Generación de modelos (Trabajar con dataset de ENTRENAMIENTO)
+#### a. Generar 3 modelos de regresión logística sobre el dataset de entrenamiento utilizando diferentes combinaciones de variables. Al menos dos modelos deben ser multivariados
+Los modelos que voy a generar son los siguientes:
+
+1. $fare\_emb\ = expit(\beta_{0}\ +\ \beta_{1}X_{Fare}\ +\ \beta_{2}X_{Embarked})$
+
+2. $sib\_parents\ = expit(\beta_{0}\ +\ \beta_{1}X_{SibSp}\ +\ \beta_{2}X_{Parch})$
+
+3. $sib\_class\_sex\ = expit(\beta_{0}\ +\ \beta_{1}X_{SibSp}\ +\ \beta_{2}X_{Sex}\ +\ \beta_{3}X_{Sex})$
+
+```{r}
+logit_formulas <- formulas(.response = ~Survived,
+                         fare_emb = ~Fare + Embarked,
+                         sib_parents = ~SibSp + Parch,
+                         sib_class_sex = ~SibSp + Pclass + Sex,
+                         original = ~Pclass + Sex + Age  
+                         )
+
+models = data_frame(logit_formulas) %>%
+  mutate(models = names(logit_formulas),
+         expression = paste(logit_formulas),
+         mod = map(logit_formulas, ~glm(.,family = 'binomial', data = titanic_train)))
+
+models %>% 
+  mutate(tidy = map(mod,tidy)) %>%
+  unnest(tidy) %>% 
+  mutate(estimate=round(estimate,5),
+         p.value=round(p.value,4)) %>%
+  select(-c(logit_formulas, mod, expression))
+```
+El primer modelo **fare_emb** es el único que tiene coeficientes que no son estadisticamente significativos, como por ejemplo la variable dummy **EmbarkedQ**. El segundo **sib_parents** si bien son significativas el coeficiente que acompaña a la variable **SibSp** esta en el borde del valor aceptado. El último de los modelos **sib_class_sex** tiene a todos sus coeficientes significativos y los mismos son negativos a excpeción del intercept.
+
+####b. Ordenar por la deviance los 3 modelos creados en el punto 3)a) y el creado en el punto 2)a) y seleccionar el mejor modelo en términos de la deviance explicada
+```{r}
+models_with_deviance = models %>% 
+  mutate(glance = map(mod,glance))
+
+models_with_deviance %>% 
+  unnest(glance) %>%
+  mutate(perc_explained_dev = 1-deviance/null.deviance) %>% 
+  select(-c(logit_formulas, expression, mod, df.null, AIC, BIC)) %>% 
+  arrange(deviance)
+```
+El mejor modelo es el original propuesto ya que es el que menor deviance tiene y el que mayor porcentaje explica, aún así el tercer modelo propuesto también tiene unos valores de deviance y porcentaje explicado muy parecidos al modelo propuesto.
+
+### 4. Evaluación del modelo (Trabajar con dataset de ENTRENAMIENTO)
+#### a. Realizar el gráfico de curva ROC y obtener el AUC para el modelo elegido. Interpretar el gráfico
+Voy a comparar el modelo orignal del punto 2.a, llamado **orignal** de aquí en adelante, y al mismo tiempo el segundo mejor modelo del punto 3 al que me referiré como **sib_class_sex**.
+```{r message=FALSE, warning=FALSE}
+models_with_prediction = models_with_deviance %>% 
+  mutate(pred= map(mod,augment, type.predict = "response"))
+
+prediction_original = models_with_prediction %>% 
+  filter(models=="original") %>% 
+  unnest(pred)
+
+prediction_sib_class_sex = models_with_prediction %>% 
+  filter(models=="sib_class_sex") %>% 
+  unnest(pred)
+
+roc_original = roc(response=prediction_original$Survived, predictor=prediction_original$.fitted)
+roc_sib_class_sex = roc(response=prediction_sib_class_sex$Survived, predictor=prediction_sib_class_sex$.fitted)
+
+ggroc(list(original=roc_original, sib_class_sex=roc_sib_class_sex), size=1) + geom_abline(slope = 1, intercept = 1, linetype='dashed') + theme_bw() + labs(title='Curvas ROC', color='Modelo')
+```
+
+```{r}
+glue("El AUC del modelo original es de: {roc_original$auc}")
+glue("El AUC del modelo sib_class_sex es de: {roc_sib_class_sex$auc}")
+```
+
+En el gráfico se puede apreciar que ambos modelos tienen un comportamiento y tendencia similar, de hecho al calcular los valores del área bajo la curva de ambos modelos la diferencia es mínima. En el caso particular del modelo **sib_class_sex** al principio parece que tiene una mejor sensibilidad pero la curva que refleja el trade-off entre especificidad y sensibilidad tiene una pendiente menos pronunciada en el modelo **original**.
+
+#### b. Realizar un violin plot e interpretar
+```{r}
+violin_original=ggplot(prediction_original, aes(x=Survived, y=.fitted, group=Survived,fill=factor(Survived))) + 
+  geom_violin() +
+  theme_bw() +
+  guides(fill=FALSE) +
+  labs(title='Violin plot', subtitle='Modelo original', y='Predicted probability')
+
+violin_sib_class_sex=ggplot(prediction_sib_class_sex, aes(x=Survived, y=.fitted, group=Survived, fill=factor(Survived))) + 
+  geom_violin() + 
+  theme_bw() +
+  guides(fill=FALSE) +
+  labs(title='Violin plot', subtitle='Modelo sib_class_sex', y='Predicted probability')
+
+plot_grid(violin_original, violin_sib_class_sex)
+```
+En el eje de abscisas la clase verdadera: Sobrevivió (1) o No Sobrevivió (0), en el eje de ordenadas la probabilidad predicha por nuestros modelos.
+El gráfico nos muestra la distribución de la cantidad de observaciones por su clase real y la probabilidad que le asigna cada uno de los modelos. Ambos en este caso se ven muy similares. En ambos modelos la concentración de la clase no sobreviviente se encuentra en hasta el 25% y luego va disminuyendo, pero en el caso del modelo **original** lo hace de una manera más abrupta. En cambio en la clase de los sobrevivientes el modelo **sib_class_sex** parece concentar un poco más sobre el nivel del 75% y luego disminuye mas rápidamente.
+
+### 5. Elección del punto corte (Trabajar con dataset de VALIDACION)
+#### a. Sobre el dataset de validación realizar un gráfico de Accuracy, Specificity, Recall y Precision en función del punto de corte
+```{r message=FALSE, warning=FALSE}
+models_validation = models_with_deviance %>% 
+  filter(models == "original" | models == 'sib_class_sex') %>% 
+  mutate(val = map(mod, augment, newdata = titanic_validation, type.predict = "response"))
+
+prediction_validation =  models_validation %>%
+  filter(models == "original") %>%
+  unnest(val)
+
+prediction_metrics = function(cutoff, predictions = prediction_validation) {
+  table = predictions %>% 
+    mutate(predicted_class = if_else(.fitted > cutoff, 1, 0) %>% as.factor(),
+           Survived = factor(Survived))
+  
+    levels(table$predicted_class) <- list("0" = "0", "1" = "1")
+    levels(table$Survived) <- list("0" = "0", "1" = "1")
+  
+  confusionMatrix(table(table$predicted_class, table$Survived), positive = "1") %>%
+    tidy() %>%
+    select(term, estimate) %>%
+    filter(term %in% c('accuracy', 'specificity', 'precision','recall')) %>%
+    mutate(cutoff = cutoff)
+}
+
+cutoffs = seq(0.01,0.95,0.01)
+
+logit_pred_original = map_dfr(cutoffs, prediction_metrics) %>% mutate(term = as.factor(term))
+
+prediction_validation =  models_validation %>%
+  filter(models == "sib_class_sex") %>%
+  unnest(val)
+
+logit_pred_sib_class_sex = map_dfr(cutoffs, prediction_metrics) %>% mutate(term = as.factor(term))
+
+logit_plot_original = 
+  ggplot(logit_pred_original, aes(cutoff, estimate, group=term, color=term)) + geom_line(size=1) +
+  theme_bw() +
+  geom_vline(xintercept = 0.49, linetype = "dashed", color = "black") +
+  labs(title= 'Modelo original', color="")
+
+logit_plot_sib_class_sex = 
+  ggplot(logit_pred_sib_class_sex, aes(cutoff, estimate, group=term, color=term)) + geom_line(size=1) +
+  theme_bw() +
+  geom_vline(xintercept = 0.42, linetype = "dashed", color = "black") +
+  labs(title= 'Modelo sib_class_sex', color="")
+
+figure = ggarrange(logit_plot_original, logit_plot_sib_class_sex, ncol=1, nrow=2)
+annotate_figure(figure, top = text_grob("Accuracy, Specificity, Recall y Precision",
+                                        color = "black", face = "bold", size = 14))
+```
+
+#### b. Elegir un punto de corte y explicar su decisión
+En este problema en particular no queda muy claro que métrica convine mejorar, pero dado que se trata de un escenario de un accidente en el mar donde intuitivamente hay más probabilidades no sobrevivir, dado que se producen en locaciones de difícil acceso, entonces lo mejor sería predecir la mayor cantidad de sobrevivientes ya que esto podría ayudar a estimar las medidas de seguridad que se deben tener y los posibles enviíos de otras unidades de rescate. Por lo que vamos a tomar un punto de corte que mejore la precisión. Los valores que eligiría sería 0.49 para el modelo **original** y 0.42 para **sib_class_sex**.
+
+#### c. Obtener la matriz de confusión con el modelo y punto de corte elegidos. Interpretarla
+Matriz de confusión para le modelo **original**
+```{r}
+sel_cutoff = 0.49
+
+full_model_original = glm(logit_formulas$original, family = 'binomial', data = titanic_dataset_converted)
+table = augment(x = full_model_original, newdata = titanic_validation, type.predict='response') 
+
+table = table %>% 
+  mutate(predicted_class = if_else(.fitted > sel_cutoff, 1, 0) %>% as.factor(),
+         Survived = factor(Survived))
+
+confusionMatrix(table(table$Survived, table$predicted_class), positive = "1")
+```
+
+Matriz de confusión para le modelo **sib_class_sex**
+```{r}
+sel_cutoff = 0.42
+
+full_model_sib_class_sex = glm(logit_formulas$sib_class_sex, family = 'binomial', data = titanic_dataset_converted)
+table = augment(x = full_model_sib_class_sex, newdata = titanic_validation, type.predict='response') 
+
+table = table %>% 
+  mutate(predicted_class = if_else(.fitted > sel_cutoff, 1, 0) %>% as.factor(),
+         Survived = factor(Survived))
+
+confusionMatrix(table(table$Survived, table$predicted_class), positive = "1")
+```
+Como puede verse el modelo **original** clasificó más sobrevivientes verdaderos y el modelo **sib_class_sex** clasificó más no sobrevivientes verdaderos. En el caso del modelo **original** los falsos negativos, solo clasificados no sobrevivientes pero que sobrevivieron fueron 26 mientras que los realmente no sobrevivieron fueron 27, en el caso de que hubiera habido botes para los clasificados como sobrevivientes 26 + 79 = 105 cuando en realidad fueron 27 + 79 = 106, solo hubiera hecho falta una sola puerta, la de Rose. Por otro lado en el modelo **sib_class_sex** se clasifió a 86 + 39 = 125 como sobrevivientes vs los 106 que hubo y en este caso no se hubiera necesitado la puerta de Rose y Jack hubiera sobrevivido.
+
+### 6. Dataset de testeo (Trabajar con dataset de TESTEO)
+#### a. Leer el archivo titanic_complete_test.csv y transformar las variables Survived, Pclass y Embarked a factor
+```{r}
+titanic_test_dataset = read.csv("titanic_complete_test.csv")
+
+titanic_test_dataset = 
+  titanic_test_dataset %>% 
+  select("PassengerId", "Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked")
+
+titanic_test_dataset = 
+  titanic_test_dataset %>%
+  mutate(Survived = as.factor(Survived), Pclass = as.factor(Pclass), Embarked = as.factor(Embarked))
+
+summary(titanic_test_dataset)
+```
+
+#### b. Con el modelo y punto de corte elegidos clasificar a las personas del dataset de testing.
+En la siguiente tabla están los pasajeros y sus predicciones usando el modelo **original**
+```{r}
+sel_cutoff = 0.49
+table_test_original = augment(x = full_model_original,
+                     newdata = titanic_test_dataset,
+                     type.predict = 'response')
+
+table_test_original = table_test_original %>% 
+  mutate(predicted_class = if_else(.fitted >= sel_cutoff, 1, 0) %>% as.factor(),
+         Survived = factor(Survived))
+
+table_test_original %>%
+  select(PassengerId, Pclass, Sex, Age, prob = .fitted, predicted_class) %>%
+  arrange(-prob)
+```
+
+En la siguiente tabla están los pasajeros y sus predicciones usando el modelo **sib_class_sex**
+```{r}
+sel_cutoff = 0.42
+table_test_sib_class_sex = augment(x = full_model_sib_class_sex,
+                     newdata = titanic_test_dataset,
+                     type.predict = 'response')
+# Clasifico utilizando el punto de corte
+table_test_sib_class_sex = table_test_sib_class_sex %>% 
+  mutate(predicted_class = if_else(.fitted >= sel_cutoff, 1, 0) %>% as.factor(),
+         Survived = factor(Survived))
+
+table_test_sib_class_sex %>%
+  select(PassengerId, Pclass, Sex, Age, prob = .fitted, predicted_class) %>%
+  arrange(-prob)
+```
+
+#### c. Obtener la matriz de confusión y comparar con la obtenida en el punto 5)c).
+**NOTA**: Ya hemos imputado los valores faltantes de ciertas variables en este dataset
+Matriz de confusión para el modelo **original**
+```{r}
+confusionMatrix(table(table_test_original$Survived, table_test_original$predicted_class), positive = "1")
+```
+En este caso el accuracy disminuyó de 0.8022 a 0.7679 y la cantidad de sobrevivientes que predice es similar a la cantidad total, al igual que con el modelo de train y validación y en relación con el objetivo inicial.
+
+Matriz de confusión para el modelo **sib_class_sex**
+```{r}
+confusionMatrix(table(table_test_sib_class_sex$Survived, table_test_sib_class_sex$predicted_class), positive = "1")
+```
+En este modelo también el accuracy disminuyó de 0.7799 a 0.7392 y al igual que antes clasificá mas sobrevivientes de los que realmente ocurrieron, lo cuál es bueno a fines prácticos, no es tan bueno en caso de querer informar anticipadamente la cantidad de sobrevivientes ya que se pueden generar falsas espectativas.

@@ -184,7 +184,7 @@ Probamos los primeros tres modelos, aquellos que tienen un único predictor. Usa
 models %>% 
   filter(models %in% c('bal','stud','inc')) %>%
   mutate(tidy = map(mod,tidy)) %>%  # Qué realizamos en este paso? Que va a tener esta columna?
-  unnest(tidy) %>% 
+  unnest(tidy, .drop = TRUE) %>% 
   mutate(estimate=round(estimate,5),
          p.value=round(p.value,4))
 ```
@@ -213,7 +213,7 @@ Ahora probamos con un modelo que utiliza las tres predictoras
 models %>% 
   filter(models == "full") %>%
   mutate(tidy = map(mod,tidy)) %>%
-  unnest(tidy) %>% 
+  unnest(tidy, .drop = TRUE) %>% 
   mutate(estimate=round(estimate,5),
          p.value=round(p.value,4))
 ```
@@ -235,10 +235,10 @@ models <- models %>%
 
 # Obtener las medidas de evaluacion de interes
 models %>% 
-  unnest(glance) %>%
+  unnest(glance, .drop = TRUE) %>%
   # Calculo de la deviance explicada
   mutate(perc_explained_dev = 1-deviance/null.deviance) %>% 
-  select(-c(df.null, AIC, BIC)) %>% 
+  select(-c(models, df.null, AIC, BIC)) %>% 
   arrange(deviance)
 ```
 
